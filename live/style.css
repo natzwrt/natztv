@@ -1,0 +1,149 @@
+:root {
+    --bg-main: #0f0f0f;
+    --bg-panel: #181818;
+    --red-yt: #ff0000;
+    --text-main: #ffffff;
+    --text-dim: #aaaaaa;
+}
+
+* { 
+    box-sizing: border-box; 
+    margin: 0; 
+    padding: 0; 
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+}
+
+body { 
+    background: var(--bg-main); 
+    color: var(--text-main); 
+    height: 100vh; 
+    height: 100dvh; 
+    overflow: hidden; 
+    display: flex; 
+    flex-direction: column; 
+}
+
+.topbar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px; background: rgba(15,15,15,0.95); border-bottom: 1px solid #222;
+    height: 54px; flex-shrink: 0;
+    user-select: none;
+}
+.brand { font-size: 18px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+.logo-icon { color: var(--red-yt); font-size: 14px; }
+.badge-live { background: var(--red-yt); font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: bold; letter-spacing: 1px;}
+.now-playing { font-size: 13px; color: var(--text-dim); max-width: 50vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.app-layout {
+    display: grid; grid-template-columns: 320px 1fr; gap: 16px; padding: 16px;
+    flex: 1; min-height: 0; 
+}
+
+.sidebar {
+    background: var(--bg-panel); border-radius: 12px; border: 1px solid #222;
+    display: flex; flex-direction: column; overflow: hidden;
+}
+.search-box { padding: 12px; border-bottom: 1px solid #222; }
+.search-box input {
+    width: 100%; background: #000; color: #fff; border: 1px solid #333;
+    padding: 10px 14px; border-radius: 8px; outline: none; transition: border 0.3s;
+}
+.search-box input:focus { border-color: #555; }
+
+.channel-list { flex: 1; overflow-y: auto; list-style: none; -webkit-overflow-scrolling: touch; padding-bottom: 24px; user-select: none; }
+.channel-list::-webkit-scrollbar { width: 6px; }
+.channel-list::-webkit-scrollbar-thumb { background: #444; border-radius: 6px; }
+
+.group-header {
+    background: #111; padding: 10px 14px; font-size: 12px; font-weight: 800;
+    color: #ccc; text-transform: uppercase; cursor: pointer; display: flex; align-items: center; gap: 10px;
+    border-top: 1px solid #222; border-left: 3px solid var(--gcolor, #555);
+}
+.group-header:first-child { border-top: none; }
+
+.channel-item {
+    display: flex; align-items: center; gap: 12px; padding: 10px 14px; cursor: pointer;
+    transition: background 0.2s; border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+.channel-item:hover { background: rgba(255,255,255,0.05); }
+.channel-item.active { background: linear-gradient(90deg, rgba(255,0,0,0.15), transparent); border-left: 3px solid var(--red-yt); }
+
+/* KUNCI LOGO KEMBALI MUNGIL (Dipaksa max-width/max-height agar tidak diobrak-abrik Shaka) */
+.ch-logo { 
+    width: 40px !important; 
+    height: 40px !important; 
+    max-width: 40px !important;
+    max-height: 40px !important;
+    border-radius: 8px; 
+    background: #000; 
+    object-fit: contain; 
+    flex-shrink: 0; 
+    border: 1px solid #222;
+}
+.ch-name { font-size: 14px; font-weight: 600; }
+
+.video-container {
+    background: #000; border-radius: 12px; overflow: hidden; position: relative;
+    flex: 1; min-height: 0; width: 100%;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
+
+.toast-msg {
+    position: absolute; bottom: 16px; left: 16px; background: rgba(0,0,0,0.8);
+    padding: 10px 16px; border-radius: 8px; font-size: 12px; border: 1px solid #333;
+    pointer-events: none; opacity: 0; transition: opacity 0.3s; z-index: 9999;
+    color: #fff;
+}
+.toast-msg.show { opacity: 1; }
+
+/* Menimpa warna bawaan Shaka UI agar merah ala YouTube */
+.shaka-volume-bar-value, .shaka-seek-bar-value { background-color: var(--red-yt) !important; }
+
+@media (max-width: 900px) {
+    .app-layout { display: flex; flex-direction: column; padding: 10px; gap: 10px; }
+    .player-section { order: 1; flex-shrink: 0; min-width: 0; width: 100%; } 
+    .video-container { aspect-ratio: 16 / 9; }
+    .sidebar { order: 2; flex: 1; min-height: 0; border-radius: 8px; }
+}
+
+/* =========================================
+   REVISI: NOTIFIKASI UNMUTE (TENGAH ATAS TEPAT)
+========================================= */
+.hint-text { 
+    position: absolute; 
+    top: 20px; /* Pindah ke bagian atas player */
+    left: 50%; 
+    transform: translateX(-50%); /* Kunci seimbang di tengah horizontal */
+    text-align: center; 
+    font-size: 13px; 
+    font-weight: bold;
+    color: #ffffff; 
+    background: rgba(0, 0, 0, 0.85); 
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    padding: 10px 18px; 
+    border-radius: 20px; 
+    z-index: 99; 
+    pointer-events: none; 
+    white-space: nowrap; 
+    box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+    animation: pulseMute 2s infinite;
+}
+
+@keyframes pulseMute {
+    0% { opacity: 1; }
+    50% { opacity: 0.6; }
+    100% { opacity: 1; }
+}
+
+/* =========================================
+   KUSTOMISASI SHAKA PLAYER
+========================================= */
+/* Hanya mengecilkan Loading Spinner Bawaan Shaka agar tidak raksasa */
+.shaka-spinner-svg {
+    width: 50px !important;
+    height: 50px !important;
+    margin: auto !important;
+}
+
+:fullscreen .video-container,
+:-webkit-full-screen .video-container { border-radius: 0; aspect-ratio: auto; width: 100%; height: 100%; }
