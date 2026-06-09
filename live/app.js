@@ -1,4 +1,4 @@
-const PLAYLIST_URL = "https://play.natztv.my.id";
+const PLAYLIST_URL = "https://playweb.natztv.my.id";
 
 let player;
 let ui;
