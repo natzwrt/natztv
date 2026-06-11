@@ -33,8 +33,6 @@ let groups = [];
 let currentGroupIndex = 0; 
 let currentPlayingUrl = ''; 
 let currentPlayActionId = 0; 
-
-// Variabel Penyimpan Timer Sembunyi Otomatis
 let controlsTimeout = null;
 
 let shakaPlayerInstance = null;
@@ -45,7 +43,7 @@ async function initApp() {
     shaka.polyfill.installAll();
     setupCustomControls();
     setupVideoNativeEvents(); 
-    setupAutoHideControls(); // Aktifkan Engine Auto Fadeout baru
+    setupAutoHideControls(); 
     
     try {
         const response = await fetch(PLAYLIST_URL);
@@ -81,13 +79,32 @@ function setupCustomControls() {
         updateVolumeIcon();
     });
 
+    // PERBAIKAN UTAMA: Robust Cross-Platform Fullscreen Engine dengan Auto-Landscape Lock
     fullscreenBtn.addEventListener('click', () => {
-        if (!document.fullscreenElement) {
-            videoWrapper.requestFullscreen().catch(err => console.error(err));
-            fullscreenBtn.innerHTML = '<i class="fa-solid fa-compress"></i>';
+        // Solusi Mutlak untuk iPhone / iPad (iOS)
+        if (videoElement.webkitEnterFullscreen && /iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+            videoElement.webkitEnterFullscreen();
+            return;
+        }
+
+        // Solusi untuk Android dan Desktop PC
+        const isFullscreenActive = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement;
+
+        if (!isFullscreenActive) {
+            const requestFS = videoWrapper.requestFullscreen || videoWrapper.webkitRequestFullscreen || videoWrapper.mozRequestFullScreen || videoWrapper.msRequestFullscreen;
+            if (requestFS) {
+                requestFS.call(videoWrapper).then(() => {
+                    // Paksa layar HP berputar otomatis ke posisi Landscape
+                    if (screen.orientation && screen.orientation.lock) {
+                        screen.orientation.lock('landscape').catch(() => {});
+                    }
+                }).catch(err => console.error("Gagal masuk fullscreen:", err));
+            }
         } else {
-            document.exitFullscreen();
-            fullscreenBtn.innerHTML = '<i class="fa-solid fa-expand"></i>';
+            const exitFS = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen || document.msExitFullscreen;
+            if (exitFS) {
+                exitFS.call(document);
+            }
         }
     });
 
@@ -101,7 +118,7 @@ function setupCustomControls() {
         const isHidden = qualityMenu.classList.contains('hidden');
         closeAllMenus();
         if (isHidden) qualityMenu.classList.remove('hidden');
-        resetControlsTimeout(); // Tahan kontrol agar tidak sembunyi saat menu dibuka
+        resetControlsTimeout(); 
     });
 
     subtitleBtn.addEventListener('click', (e) => {
@@ -128,29 +145,25 @@ function setupCustomControls() {
     });
 }
 
-// PERBAIKAN LOGIKA UTAMA: Sistem Auto-Fadeout berbasis Gerakan/Sentuhan
 function setupAutoHideControls() {
-    // Pemicu kontrol menyala
     videoWrapper.addEventListener('mousemove', resetControlsTimeout);
     videoWrapper.addEventListener('click', resetControlsTimeout);
     videoWrapper.addEventListener('touchstart', resetControlsTimeout, {passive: true});
 
     videoElement.addEventListener('play', resetControlsTimeout);
-    videoElement.addEventListener('pause', resetControlsTimeout); // Menjaga kontrol tetap ada saat pause
+    videoElement.addEventListener('pause', resetControlsTimeout); 
 }
 
 function resetControlsTimeout() {
-    videoWrapper.classList.add('show-controls'); // Nyalakan kontrol
+    videoWrapper.classList.add('show-controls'); 
     clearTimeout(controlsTimeout);
 
-    // Periksa apakah ada menu dropdown yang sedang terbuka
     const isMenuOpen = !qualityMenu.classList.contains('hidden') || !subtitleMenu.classList.contains('hidden');
 
-    // Kontrol hanya boleh menghilang jika video sedang berjalan DAN user tidak sedang membuka menu kualitas/subtitle
     if (!videoElement.paused && !isMenuOpen) {
         controlsTimeout = setTimeout(() => {
-            videoWrapper.classList.remove('show-controls'); // Matikan kontrol setelah 1 detik diam
-        }, 1000);
+            videoWrapper.classList.remove('show-controls'); 
+        }, 3000);
     }
 }
 
@@ -168,6 +181,24 @@ function setupVideoNativeEvents() {
     videoElement.addEventListener('error', () => {
         if(videoElement.error) triggerErrorDisplay(videoElement.error);
     });
+
+    // PERBAIKAN GLOBAL: Deteksi jika user keluar dari Fullscreen menggunakan tombol BACK/SWIPE bawaan HP
+    const onFullscreenChange = () => {
+        const isFS = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement;
+        if (isFS) {
+            fullscreenBtn.innerHTML = '<i class="fa-solid fa-compress"></i>';
+        } else {
+            fullscreenBtn.innerHTML = '<i class="fa-solid fa-expand"></i>';
+            // Kembalikan orientasi layar HP ke portrait normal jika keluar dari fullscreen
+            if (screen.orientation && screen.orientation.unlock) {
+                screen.orientation.unlock();
+            }
+        }
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    document.addEventListener('mozfullscreenchange', onFullscreenChange);
+    document.addEventListener('MSFullscreenChange', onFullscreenChange);
 }
 
 function hideLoader() {
@@ -261,7 +292,6 @@ async function playChannel(channel, cardElement) {
         } else {
             await initHlsPlayer(channel, playActionId);
         }
-        resetControlsTimeout(); // Picu hitung mundur penyembunyian kontrol setelah ganti channel
     } catch (error) {
         if (playActionId === currentPlayActionId) {
             console.error("Stream Error:", error);
@@ -462,14 +492,11 @@ function setActiveItem(menuElement, selectedBtn) {
     selectedBtn.classList.add('active');
 }
 
-// Destroy Player
 async function destroyPlayers() {
     videoElement.pause();
     errorOverlay.classList.add('hidden'); 
-    
     if (shakaPlayerInstance) await shakaPlayerInstance.unload(); 
     if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
-    
     videoElement.removeAttribute('src'); 
 }
 
