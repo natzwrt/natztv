@@ -35,6 +35,11 @@ let currentPlayingUrl = '';
 let currentPlayActionId = 0; 
 let controlsTimeout = null;
 
+// State Pemantau Pembekuan Video (Stall/Freeze Watcher)
+let lastTrackedTime = -1;
+let stallCheckIntervalId = null;
+let currentActiveChannelData = null; 
+
 let shakaPlayerInstance = null;
 let hlsInstance = null;
 
@@ -44,6 +49,7 @@ async function initApp() {
     setupCustomControls();
     setupVideoNativeEvents(); 
     setupAutoHideControls(); 
+    startStallHeartbeatDetector(); 
     
     try {
         const response = await fetch(PLAYLIST_URL);
@@ -79,32 +85,26 @@ function setupCustomControls() {
         updateVolumeIcon();
     });
 
-    // PERBAIKAN UTAMA: Robust Cross-Platform Fullscreen Engine dengan Auto-Landscape Lock
     fullscreenBtn.addEventListener('click', () => {
-        // Solusi Mutlak untuk iPhone / iPad (iOS)
         if (videoElement.webkitEnterFullscreen && /iPhone|iPad|iPod/i.test(navigator.userAgent)) {
             videoElement.webkitEnterFullscreen();
             return;
         }
 
-        // Solusi untuk Android dan Desktop PC
         const isFullscreenActive = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement;
 
         if (!isFullscreenActive) {
             const requestFS = videoWrapper.requestFullscreen || videoWrapper.webkitRequestFullscreen || videoWrapper.mozRequestFullScreen || videoWrapper.msRequestFullscreen;
             if (requestFS) {
                 requestFS.call(videoWrapper).then(() => {
-                    // Paksa layar HP berputar otomatis ke posisi Landscape
                     if (screen.orientation && screen.orientation.lock) {
                         screen.orientation.lock('landscape').catch(() => {});
                     }
-                }).catch(err => console.error("Gagal masuk fullscreen:", err));
+                }).catch(err => console.error(err));
             }
         } else {
-            const exitFS = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen || document.msExitFullscreen;
-            if (exitFS) {
-                exitFS.call(document);
-            }
+            const exitFS = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen || document.msFullscreenFullscreen;
+            if (exitFS) exitFS.call(document);
         }
     });
 
@@ -131,7 +131,6 @@ function setupCustomControls() {
 
     document.addEventListener('click', closeAllMenus);
 
-    // Kategori
     prevCategoryBtn.addEventListener('click', () => {
         if (groups.length === 0) return;
         currentGroupIndex = (currentGroupIndex - 1 + groups.length) % groups.length;
@@ -182,23 +181,44 @@ function setupVideoNativeEvents() {
         if(videoElement.error) triggerErrorDisplay(videoElement.error);
     });
 
-    // PERBAIKAN GLOBAL: Deteksi jika user keluar dari Fullscreen menggunakan tombol BACK/SWIPE bawaan HP
+    videoElement.addEventListener('stalled', () => {
+        console.warn("Koneksi jaringan video tersendat... Mencoba memulihkan.");
+        if (hlsInstance) hlsInstance.startLoad(); 
+    });
+
     const onFullscreenChange = () => {
         const isFS = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement;
         if (isFS) {
             fullscreenBtn.innerHTML = '<i class="fa-solid fa-compress"></i>';
         } else {
             fullscreenBtn.innerHTML = '<i class="fa-solid fa-expand"></i>';
-            // Kembalikan orientasi layar HP ke portrait normal jika keluar dari fullscreen
-            if (screen.orientation && screen.orientation.unlock) {
-                screen.orientation.unlock();
-            }
+            if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
         }
     };
     document.addEventListener('fullscreenchange', onFullscreenChange);
     document.addEventListener('webkitfullscreenchange', onFullscreenChange);
     document.addEventListener('mozfullscreenchange', onFullscreenChange);
     document.addEventListener('MSFullscreenChange', onFullscreenChange);
+}
+
+function startStallHeartbeatDetector() {
+    if (stallCheckIntervalId) clearInterval(stallCheckIntervalId);
+    
+    stallCheckIntervalId = setInterval(() => {
+        if (!videoElement.paused && errorOverlay.classList.contains('hidden') && mainPlayerWrapper.classList.contains('hidden') === false) {
+            if (videoElement.currentTime === lastTrackedTime) {
+                console.warn("Deteksi Silent Freeze! Video macet. Melakukan auto-recovery...");
+                loadingOverlay.classList.remove('hidden');
+                
+                if (hlsInstance) {
+                    hlsInstance.startLoad(); 
+                } else if (shakaPlayerInstance) {
+                    videoElement.currentTime = videoElement.currentTime + 0.1;
+                }
+            }
+            lastTrackedTime = videoElement.currentTime;
+        }
+    }, 5000); 
 }
 
 function hideLoader() {
@@ -266,6 +286,7 @@ async function playChannel(channel, cardElement) {
     currentPlayActionId++;
     const playActionId = currentPlayActionId;
     currentPlayingUrl = channel.url; 
+    currentActiveChannelData = channel; 
 
     if (!brandingScreen.classList.contains('hidden')) {
         brandingScreen.classList.add('hidden');
@@ -280,6 +301,8 @@ async function playChannel(channel, cardElement) {
     qualityLabel.textContent = 'Auto';
     qualityMenu.innerHTML = ''; 
     subtitleBox.style.display = 'none'; 
+
+    lastTrackedTime = -1; 
 
     await destroyPlayers();
 
@@ -306,7 +329,20 @@ async function initShakaPlayer(channel, playActionId) {
         shakaPlayerInstance = new shaka.Player();
         await shakaPlayerInstance.attach(videoElement);
         shakaPlayerInstance.addEventListener('error', (e) => {
-            if (e.detail && e.detail.severity === 2) triggerErrorDisplay(e.detail);
+            if (e.detail && e.detail.severity === 2) {
+                triggerErrorDisplay(e.detail);
+            } else {
+                console.warn("Shaka Player Warning (Non-Fatal):", e.detail);
+            }
+        });
+
+        // PERBAIKAN UTAMA SHAKA: Suntikkan Header Anti-Cache setiap kali Shaka merefresh Manifest (.mpd)
+        shakaPlayerInstance.getNetworkingEngine().registerRequestFilter((type, request) => {
+            if (type === shaka.net.NetworkingEngine.RequestType.MANIFEST) {
+                request.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+                request.headers['Pragma'] = 'no-cache';
+                request.headers['Expires'] = '0';
+            }
         });
     }
 
@@ -392,7 +428,19 @@ function buildShakaSubtitleMenu() {
 async function initHlsPlayer(channel, playActionId) {
     return new Promise((resolve, reject) => {
         if (Hls.isSupported()) {
-            hlsInstance = new Hls({ maxMaxBufferLength: 30, liveSyncDurationCount: 3 });
+            // PERBAIKAN UTAMA HLS: Suntikkan Header Anti-Cache melalui xhrSetup saat mengunduh Manifest (.m3u8)
+            hlsInstance = new Hls({ 
+                maxMaxBufferLength: 30, 
+                liveSyncDurationCount: 3,
+                xhrSetup: function (xhr, url) {
+                    if (url.includes('.m3u8') || url.includes('.mpd')) {
+                        xhr.setRequestHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+                        xhr.setRequestHeader("Pragma", "no-cache");
+                        xhr.setRequestHeader("Expires", "0");
+                    }
+                }
+            });
+            
             hlsInstance.loadSource(channel.url);
             hlsInstance.attachMedia(videoElement);
             
@@ -403,8 +451,24 @@ async function initHlsPlayer(channel, playActionId) {
                 buildHlsSubtitleMenu(); 
                 resolve();
             });
+
             hlsInstance.on(Hls.Events.ERROR, (ev, data) => { 
-                if (data.fatal) reject(data); 
+                if (data.fatal) {
+                    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                        console.warn("Eror fatal jaringan HLS. Memuat ulang segmen...");
+                        hlsInstance.startLoad();
+                    } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                        console.warn("Eror fatal media HLS. Memulihkan sinkronisasi...");
+                        hlsInstance.recoverMediaError();
+                    } else {
+                        reject(data); 
+                    }
+                } else {
+                    if (data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR || data.details === Hls.ErrorDetails.LEVEL_LOAD_ERROR) {
+                        console.warn("Gagal memuat pecahan segmen video. Memuat ulang...");
+                        hlsInstance.startLoad();
+                    }
+                }
             });
         } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
             videoElement.src = channel.url;
