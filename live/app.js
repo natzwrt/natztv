@@ -103,7 +103,7 @@ function setupCustomControls() {
                 }).catch(err => console.error(err));
             }
         } else {
-            const exitFS = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen || document.msFullscreenFullscreen;
+            const exitFS = document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen || document.msFullscreenElement;
             if (exitFS) exitFS.call(document);
         }
     });
@@ -335,15 +335,6 @@ async function initShakaPlayer(channel, playActionId) {
                 console.warn("Shaka Player Warning (Non-Fatal):", e.detail);
             }
         });
-
-        // PERBAIKAN UTAMA SHAKA: Suntikkan Header Anti-Cache setiap kali Shaka merefresh Manifest (.mpd)
-        shakaPlayerInstance.getNetworkingEngine().registerRequestFilter((type, request) => {
-            if (type === shaka.net.NetworkingEngine.RequestType.MANIFEST) {
-                request.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
-                request.headers['Pragma'] = 'no-cache';
-                request.headers['Expires'] = '0';
-            }
-        });
     }
 
     const config = { drm: { clearKeys: {} } }; 
@@ -428,17 +419,9 @@ function buildShakaSubtitleMenu() {
 async function initHlsPlayer(channel, playActionId) {
     return new Promise((resolve, reject) => {
         if (Hls.isSupported()) {
-            // PERBAIKAN UTAMA HLS: Suntikkan Header Anti-Cache melalui xhrSetup saat mengunduh Manifest (.m3u8)
             hlsInstance = new Hls({ 
                 maxMaxBufferLength: 30, 
-                liveSyncDurationCount: 3,
-                xhrSetup: function (xhr, url) {
-                    if (url.includes('.m3u8') || url.includes('.mpd')) {
-                        xhr.setRequestHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-                        xhr.setRequestHeader("Pragma", "no-cache");
-                        xhr.setRequestHeader("Expires", "0");
-                    }
-                }
+                liveSyncDurationCount: 3 
             });
             
             hlsInstance.loadSource(channel.url);
