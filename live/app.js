@@ -244,7 +244,7 @@ function setupFilterOptions() {
 
 function updateCategoryUI() {
     const activeGroup = groups[currentGroupIndex];
-    currentCategoryBox.textContent = activeGroup === 'all' ? 'Semua Kategori' : activeGroup;
+    currentCategoryBox.textContent = activeGroup === 'all' ? 'Semua Channel' : activeGroup;
     renderChannels(activeGroup);
 }
 
