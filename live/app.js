@@ -32,12 +32,7 @@ let channels = [];
 let groups = []; 
 let currentGroupIndex = 0; 
 let currentPlayingUrl = ''; 
-let currentPlayActionId = 0; 
 let controlsTimeout = null;
-
-// State Pemantau Pembekuan Video (Stall/Freeze Watcher)
-let lastTrackedTime = -1;
-let stallCheckIntervalId = null;
 
 let shakaPlayerInstance = null;
 let hlsInstance = null;
@@ -48,7 +43,6 @@ async function initApp() {
     setupCustomControls();
     setupVideoNativeEvents(); 
     setupAutoHideControls(); 
-    startStallHeartbeatDetector(); 
     
     try {
         const response = await fetch(PLAYLIST_URL);
@@ -147,7 +141,6 @@ function setupAutoHideControls() {
     videoWrapper.addEventListener('mousemove', resetControlsTimeout);
     videoWrapper.addEventListener('click', resetControlsTimeout);
     videoWrapper.addEventListener('touchstart', resetControlsTimeout, {passive: true});
-
     videoElement.addEventListener('play', resetControlsTimeout);
     videoElement.addEventListener('pause', resetControlsTimeout); 
 }
@@ -175,15 +168,7 @@ function setupVideoNativeEvents() {
     videoElement.addEventListener('playing', hideLoader);
     videoElement.addEventListener('timeupdate', () => { if (videoElement.currentTime > 0) hideLoader(); });
     videoElement.addEventListener('waiting', () => { loadingOverlay.classList.remove('hidden'); });
-    
-    videoElement.addEventListener('error', () => {
-        if(videoElement.error) triggerErrorDisplay(videoElement.error);
-    });
-
-    videoElement.addEventListener('stalled', () => {
-        console.warn("Koneksi jaringan video tersendat... Mencoba memulihkan.");
-        if (hlsInstance) hlsInstance.startLoad(); 
-    });
+    videoElement.addEventListener('error', () => { if(videoElement.error) triggerErrorDisplay(videoElement.error); });
 
     const onFullscreenChange = () => {
         const isFS = document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement;
@@ -200,23 +185,6 @@ function setupVideoNativeEvents() {
     document.addEventListener('MSFullscreenChange', onFullscreenChange);
 }
 
-function startStallHeartbeatDetector() {
-    if (stallCheckIntervalId) clearInterval(stallCheckIntervalId);
-    
-    stallCheckIntervalId = setInterval(() => {
-        if (!videoElement.paused && errorOverlay.classList.contains('hidden') && mainPlayerWrapper.classList.contains('hidden') === false) {
-            if (videoElement.currentTime === lastTrackedTime) {
-                console.warn("Deteksi Silent Freeze! Melakukan auto-recovery...");
-                loadingOverlay.classList.remove('hidden');
-                
-                if (hlsInstance) hlsInstance.startLoad(); 
-                else if (shakaPlayerInstance) videoElement.currentTime = videoElement.currentTime + 0.1;
-            }
-            lastTrackedTime = videoElement.currentTime;
-        }
-    }, 5000); 
-}
-
 function hideLoader() {
     if (!loadingOverlay.classList.contains('hidden')) loadingOverlay.classList.add('hidden');
 }
@@ -224,7 +192,6 @@ function hideLoader() {
 function triggerErrorDisplay(err) {
     hideLoader();
     errorOverlay.classList.remove('hidden');
-    
     let code = "UNKNOWN_ERROR";
     if (err && err.details) code = `HLS_${err.details.toUpperCase()}`;
     else if (err && err.code && typeof err.code === 'number' && !err.MEDIA_ERR_NETWORK) code = `SHAKA_ERR_${err.code}`;
@@ -279,8 +246,6 @@ function renderChannels(filterGroup) {
 
 // Play Channel Eksekutor
 async function playChannel(channel, cardElement) {
-    currentPlayActionId++;
-    const playActionId = currentPlayActionId;
     currentPlayingUrl = channel.url; 
 
     if (!brandingScreen.classList.contains('hidden')) {
@@ -297,44 +262,34 @@ async function playChannel(channel, cardElement) {
     qualityMenu.innerHTML = ''; 
     subtitleBox.style.display = 'none'; 
 
-    lastTrackedTime = -1; 
-
     await destroyPlayers();
-
-    if (playActionId !== currentPlayActionId) return;
 
     try {
         const isMpd = channel.url.toLowerCase().includes('.mpd');
         if (isMpd) {
-            await initShakaPlayer(channel, playActionId);
+            await initShakaPlayer(channel);
         } else {
-            await initHlsPlayer(channel, playActionId);
+            await initHlsPlayer(channel);
         }
     } catch (error) {
-        if (playActionId === currentPlayActionId) {
-            console.error("Stream Error:", error);
-            triggerErrorDisplay(error);
-        }
+        console.error("Stream Error:", error);
+        triggerErrorDisplay(error);
     }
 }
 
 // ==========================================
-// SHAKA ENGINE DENGAN LOGIKA BARU
+// MURNI LOGIKA SHAKA PLAYER ANDA
 // ==========================================
-async function initShakaPlayer(channel, playActionId) {
+async function initShakaPlayer(channel) {
     if (!shakaPlayerInstance) {
-        shakaPlayerInstance = new shaka.Player();
-        await shakaPlayerInstance.attach(videoElement);
+        shakaPlayerInstance = new shaka.Player(videoElement); // Init native
         shakaPlayerInstance.addEventListener('error', (e) => {
-            if (e.detail && e.detail.severity === 2) {
-                triggerErrorDisplay(e.detail);
-            } else {
-                console.warn("Shaka Player Warning (Non-Fatal):", e.detail);
-            }
+            console.error("Shaka Player Error:", e.detail);
+            if (e.detail && e.detail.severity === 2) triggerErrorDisplay(e.detail);
         });
     }
 
-    // [LOGIKA 1]: Injeksi Dynamic Headers dari Playlist 
+    // Injeksi Headers sesuai format Anda
     shakaPlayerInstance.getNetworkingEngine().clearAllRequestFilters();
     shakaPlayerInstance.getNetworkingEngine().registerRequestFilter((type, request) => {
         if (channel.headers && (type === shaka.net.NetworkingEngine.RequestType.MANIFEST || type === shaka.net.NetworkingEngine.RequestType.SEGMENT)) {
@@ -344,30 +299,27 @@ async function initShakaPlayer(channel, playActionId) {
         }
     });
 
-    // [LOGIKA 2]: Konversi Hex ke Base64Url untuk Clearkey DRM
-    const config = { drm: { clearKeys: {} } }; 
+    // Konversi Clearkey DRM sesuai format Anda
+    const config = { abr: { enabled: true }, drm: { clearKeys: {} } }; 
     if (channel.drm && channel.drm.type === 'clearkey' && channel.drm.key) {
         const [keyId, key] = channel.drm.key.split(':');
         if (keyId && key) {
             config.drm.clearKeys[hexToBase64Url(keyId)] = hexToBase64Url(key);
         }
     }
-    if (Object.keys(config.drm.clearKeys).length === 0) delete config.drm;
-    shakaPlayerInstance.configure(config);
+    if (Object.keys(config.drm.clearKeys).length === 0) delete config.drm.clearKeys;
+    if (Object.keys(config.drm).length === 0) delete config.drm;
     
-    // [LOGIKA 3]: Paksa Identitas File (Force MIME-Type) Mencegah Error 4001 / Cache Issue
+    await shakaPlayerInstance.configure(config);
+    
+    // PEMAKSAAN MIME-TYPE (Penangkal Error Disk Cache & 4001)
     let mimeType = null;
-    if (channel.url.toLowerCase().includes('.mpd')) {
-        mimeType = 'application/dash+xml';
-    } else if (channel.url.toLowerCase().includes('.m3u8')) {
-        mimeType = 'application/vnd.apple.mpegurl';
-    }
+    if (channel.url.toLowerCase().includes('.mpd')) mimeType = 'application/dash+xml';
+    else if (channel.url.toLowerCase().includes('.m3u8')) mimeType = 'application/vnd.apple.mpegurl';
 
-    // Gunakan argumen ke-3 untuk bypass sniffing mime-type
     await shakaPlayerInstance.load(channel.url, null, mimeType);
-    if (playActionId !== currentPlayActionId) return;
     
-    videoElement.play();
+    videoElement.play().catch(()=>{});
     buildShakaQualityMenu();
     buildShakaSubtitleMenu(); 
 }
@@ -409,7 +361,6 @@ function buildShakaSubtitleMenu() {
 
     if (tracks.length > 0) {
         subtitleBox.style.display = 'block';
-        
         const offBtn = document.createElement('button');
         offBtn.className = 'quality-item active';
         offBtn.textContent = 'Off';
@@ -436,15 +387,14 @@ function buildShakaSubtitleMenu() {
 }
 
 // ==========================================
-// HLS ENGINE DENGAN LOGIKA HEADER DINAMIS
+// MURNI LOGIKA HLS ANDA
 // ==========================================
-async function initHlsPlayer(channel, playActionId) {
+async function initHlsPlayer(channel) {
     return new Promise((resolve, reject) => {
         if (Hls.isSupported()) {
             hlsInstance = new Hls({ 
                 maxMaxBufferLength: 30, 
                 liveSyncDurationCount: 3,
-                // Terapkan injeksi header dinamis untuk HLS.js juga
                 xhrSetup: function (xhr, url) {
                     if (channel.headers) {
                         for (const h in channel.headers) {
@@ -458,35 +408,19 @@ async function initHlsPlayer(channel, playActionId) {
             hlsInstance.attachMedia(videoElement);
             
             hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
-                if (playActionId !== currentPlayActionId) return resolve();
-                videoElement.play();
+                videoElement.play().catch(()=>{});
                 buildHlsQualityMenu();
                 buildHlsSubtitleMenu(); 
                 resolve();
             });
 
             hlsInstance.on(Hls.Events.ERROR, (ev, data) => { 
-                if (data.fatal) {
-                    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                        console.warn("Eror fatal jaringan HLS. Memuat ulang segmen...");
-                        hlsInstance.startLoad();
-                    } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                        console.warn("Eror fatal media HLS. Memulihkan sinkronisasi...");
-                        hlsInstance.recoverMediaError();
-                    } else {
-                        reject(data); 
-                    }
-                } else {
-                    if (data.details === Hls.ErrorDetails.FRAG_LOAD_ERROR || data.details === Hls.ErrorDetails.LEVEL_LOAD_ERROR) {
-                        console.warn("Gagal memuat pecahan segmen video. Memuat ulang...");
-                        hlsInstance.startLoad();
-                    }
-                }
+                if (data.fatal) reject(data); 
             });
         } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
             videoElement.src = channel.url;
             videoElement.addEventListener('loadedmetadata', function onLoaded() { 
-                if (playActionId === currentPlayActionId) videoElement.play(); 
+                videoElement.play().catch(()=>{}); 
                 videoElement.removeEventListener('loadedmetadata', onLoaded); 
                 resolve(); 
             });
@@ -572,20 +506,23 @@ function setActiveItem(menuElement, selectedBtn) {
 async function destroyPlayers() {
     videoElement.pause();
     errorOverlay.classList.add('hidden'); 
-    if (shakaPlayerInstance) await shakaPlayerInstance.unload(); 
-    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+    
+    if (shakaPlayerInstance) {
+        await shakaPlayerInstance.destroy();
+        shakaPlayerInstance = null;
+    }
+    if (hlsInstance) { 
+        hlsInstance.destroy(); 
+        hlsInstance = null; 
+    }
     videoElement.removeAttribute('src'); 
+    videoElement.load();
 }
 
-// Helper Pintar: Konversi Hex DRM ke Base64Url agar Shaka Engine tidak mogok membaca Key
-function hexToBase64Url(str) {
-    if (/^[0-9a-fA-F]+$/.test(str) && str.length % 2 === 0) {
-        try {
-            const bytes = new Uint8Array(str.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
-            return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        } catch(e) { return str; }
-    }
-    return str; // Kembalikan utuh jika sudah berformat base64
+// Logika Asli Hex to Base64Url
+function hexToBase64Url(hex) {
+    const bytes = new Uint8Array(hex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+    return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 document.addEventListener('DOMContentLoaded', initApp);
